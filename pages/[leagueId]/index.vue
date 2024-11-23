@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ChevronLeft, ChevronRight, LoaderCircle } from 'lucide-vue-next';
 import { ref, onMounted, computed } from 'vue';
-import { useRoute, type MatcherLocation } from 'vue-router';
+import { useRoute } from 'vue-router';
 import Button from '~/components/ui/button/Button.vue';
 import { useSleeper } from '~/composables/useSleeperAPI';
 import type { LeagueInfo, Matchup, NFLSeasonInfo, Roster, User } from '~/types/sleeper';
@@ -10,6 +10,7 @@ const { getLeagueInfo, getMatchups, getUsers, getRosters, getNFLState } = useSle
 
 // Access the `leagueId` from the route parameters
 const route = useRoute();
+const router = useRouter();
 const leagueId = computed(() => route.params.leagueId as string);
 
 // State to hold data
@@ -23,26 +24,24 @@ const loading = ref<boolean>(true)
 
 // Fetch data when the component is mounted
 onMounted(async () => {
-  if (!leagueId.value) {
-    console.error('League ID is missing in the URL');
-    return;
-  }
+  if (process.client) {
+    try {
+      loading.value = true;
+      leagueInfo.value = await getLeagueInfo(leagueId.value);
+      nflState.value = await getNFLState();
+      week.value = nflState.value.week;
 
-  try {
-    loading.value = true;
-    leagueInfo.value = await getLeagueInfo(leagueId.value);
-    nflState.value = await getNFLState();
-    week.value = nflState.value.week;
+      users.value = await getUsers(leagueId.value);
+      console.log("Users");
+      console.log(users.value);
 
-    users.value = await getUsers(leagueId.value);
-    console.log("Users");
-    console.log(users.value);
-
-    rosters.value = await getRosters(leagueId.value);
-    console.log("Rosters");
-    console.log(rosters.value);
-  } catch (error) {
-    console.error('Error fetching data:', error);
+      rosters.value = await getRosters(leagueId.value);
+      console.log("Rosters");
+      console.log(rosters.value);
+    } catch (error) {
+      router.replace('/');
+      console.error('Error fetching data:', error);
+    }
   }
 });
 
