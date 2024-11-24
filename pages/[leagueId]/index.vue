@@ -21,6 +21,7 @@ const matchups = ref<Matchup[]>([]);
 const rosters = ref<Roster[]>([]);
 const users = ref<User[]>([]);
 const loading = ref<boolean>(true)
+let timerId: NodeJS.Timeout | undefined;
 
 // Fetch data when the component is mounted
 onMounted(async () => {
@@ -30,26 +31,25 @@ onMounted(async () => {
       leagueInfo.value = await getLeagueInfo(leagueId.value);
       nflState.value = await getNFLState();
       week.value = nflState.value.week;
-
       users.value = await getUsers(leagueId.value);
-      console.log("Users");
-      console.log(users.value);
-
       rosters.value = await getRosters(leagueId.value);
-      console.log("Rosters");
-      console.log(rosters.value);
     } catch (error) {
       router.replace('/');
       console.error('Error fetching data:', error);
     }
+
+    timerId = setInterval(async () => { await reloadMatchups(); }, 60000); // 60000ms = 1 minute
   }
 });
 
 watch(week, async() => {
-  matchups.value = await getMatchups(leagueId.value, week.value);
-  console.log(matchups.value);
-  loading.value = false;
+ await reloadMatchups();
 })
+
+const reloadMatchups = async () => {
+  matchups.value = await getMatchups(leagueId.value, week.value);
+  loading.value = false;
+}
 
 const increaseWeek = () => {
   if (week.value < 18) {
@@ -81,6 +81,10 @@ const sortedUsers = computed(() => {
 const medianIdx = computed(() => {
     return users.value.length / 2;
 })
+
+onUnmounted(() => {
+  clearInterval(timerId);
+});
 
 </script>
 
