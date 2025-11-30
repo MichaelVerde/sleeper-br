@@ -4,9 +4,9 @@ import { ref, onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import Button from '~/components/ui/button/Button.vue';
 import { useSleeper } from '~/composables/useSleeperAPI';
-import type { LeagueInfo, Matchup, NFLSeasonInfo, Roster, User } from '~/types/sleeper';
+import type { LeagueInfo, Matchup, MatchupResult, NFLSeasonInfo, Roster, User } from '~/types/sleeper';
 
-const { getLeagueInfo, getMatchups, getUsers, getRosters, getNFLState } = useSleeper();
+const { getLeagueInfo, getMatchups, getUsers, getRosters, getNFLState, getAllProjections, getAllGames, calculateMatchupProjections } = useSleeper();
 
 // Access the `leagueId` from the route parameters
 const route = useRoute();
@@ -20,6 +20,7 @@ const nflState = ref<NFLSeasonInfo>();
 const matchups = ref<Matchup[]>([]);
 const rosters = ref<Roster[]>([]);
 const users = ref<User[]>([]);
+const matchupProjections = ref<MatchupResult[]>([]);
 const loading = ref<boolean>(true)
 let timerId: NodeJS.Timeout | undefined;
 
@@ -29,6 +30,8 @@ onMounted(async () => {
     try {
       loading.value = true;
       leagueInfo.value = await getLeagueInfo(leagueId.value);
+      leagueInfo.value = await getLeagueInfo(leagueId.value);
+      console.log(leagueInfo.value)
       nflState.value = await getNFLState();
       week.value = nflState.value.week;
       users.value = await getUsers(leagueId.value);
@@ -47,7 +50,13 @@ watch(week, async() => {
 })
 
 const reloadMatchups = async () => {
-  matchups.value = await getMatchups(leagueId.value, week.value);
+  matchups.value = await getMatchups(leagueId.value, week.value);  
+  matchupProjections.value = await calculateMatchupProjections(
+    nflState.value,
+    week.value,
+    matchups.value
+  );  
+  console.log(matchupProjections.value)
   loading.value = false;
 }
 
@@ -67,14 +76,14 @@ const getRosterId = (userId:string ):number | undefined => {
   return rosters.value.find(r => r.owner_id === userId)?.roster_id;
 };
 
-const getPoints = (userId:string):number | undefined => {
+const getPoints = (userId:string):MatchupResult | undefined => {
   const rosterId = getRosterId(userId);
-  return matchups.value.find(m => m.roster_id === rosterId)?.points;
+  return matchupProjections.value.find(m => m.roster_id === rosterId);
 };
 
 const sortedUsers = computed(() => {
   return users.value.sort((a, b) => {
-    return (getPoints(b.user_id) ?? 0) - (getPoints(a.user_id) ?? 0);
+    return (getPoints(b.user_id)?.starters_projected_total ?? 0) - (getPoints(a.user_id)?.starters_projected_total ?? 0);
   })
 })
 
@@ -126,7 +135,8 @@ onUnmounted(() => {
           </div>
           <div>
             <div class="text-right">
-              <p class="text-lg font-semibold text-blue-600">{{ getPoints(user.user_id) }} pts</p>
+              <p class="text-lg font-semibold text-blue-600">{{ getPoints(user.user_id)?.points?.toFixed(2) ?? 0 }} pts</p>                            
+              <p class="text-md italic text-gray-600">{{ getPoints(user.user_id)?.starters_projected_total.toFixed(2) ?? 0 }} pts</p>              
             </div>
           </div>
         </div>

@@ -63,3 +63,21 @@ export interface User {
   }
   
   
+ export  interface MatchupResult {
+  matchup_id: number;
+  roster_id: number;
+  starters: StarterBreakdown[];
+  starters_live_total: number;
+  starters_projected_total: number;
+  points?: number;
+}
+
+
+export interface StarterBreakdown {
+  player_id: string;
+  team?: string;
+  opponent?: string;
+  game_id?: string;
+  live_points: number;
+  projected_points: number;
+}
