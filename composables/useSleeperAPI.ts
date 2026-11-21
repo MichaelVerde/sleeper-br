@@ -1,10 +1,12 @@
 import type {
+  DraftPick,
   LeagueInfo,
   Matchup,
   MatchupResult,
   NFLPlayer,
   NFLSeasonInfo,
   Roster,
+  SleeperTransaction,
   StarterBreakdown,
   User
 } from '~/types/sleeper';
@@ -211,6 +213,17 @@ export const useSleeper = () => {
     return fetchJson<NFLSeasonInfo>(`${BASE_URL}/state/nfl`, 'No NFL state returned');
   };
 
+  const getDraftPicks = async (draftId: string): Promise<DraftPick[]> => {
+    return fetchJson<DraftPick[]>(`${BASE_URL}/draft/${draftId}/picks`, 'No draft picks returned');
+  };
+
+  const getTransactions = async (leagueId: string, week: number): Promise<SleeperTransaction[]> => {
+    return fetchJson<SleeperTransaction[]>(
+      `${BASE_URL}/league/${leagueId}/transactions/${week}`,
+      'No transactions returned'
+    );
+  };
+
   const getNFLPlayers = async (): Promise<Record<string, NFLPlayer>> => {
     if (!nflPlayersPromise) {
       nflPlayersPromise = fetchJson<Record<string, NFLPlayer>>(
@@ -385,6 +398,8 @@ export const useSleeper = () => {
     getUsers,
     getRosters,
     getNFLState,
+    getDraftPicks,
+    getTransactions,
     getNFLPlayers,
     getNFLPlayerPositions,
     getAllProjections,

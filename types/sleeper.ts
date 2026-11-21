@@ -45,6 +45,7 @@ export interface NFLPlayer {
 
   export interface LeagueInfo {
     league_id: string; // Unique identifier for the league
+    draft_id?: string;
     name: string; // Name of the league
     season: string; // The year of the season
     season_type: string; // Type of the season (e.g., "regular")
@@ -53,6 +54,7 @@ export interface NFLPlayer {
     settings?: {
       last_scored_leg?: number;
       leg?: number;
+      trade_deadline?: number;
       [key: string]: any;
     };
     metadata?: Record<string, string>; // Additional league-specific metadata
@@ -101,4 +103,24 @@ export interface StarterBreakdown {
   live_points: number;
   projected_points: number;
   variance: number;
+}
+
+export interface DraftPick {
+  player_id: string;
+  round: number;
+  pick_no: number;
+  draft_slot: number;
+  roster_id: number;
+  is_keeper?: boolean | null;
+  metadata?: Record<string, string>;
+}
+
+export interface SleeperTransaction {
+  transaction_id: string;
+  type: string;
+  status: string;
+  created: number;
+  roster_ids: number[];
+  adds?: Record<string, number> | null;
+  drops?: Record<string, number> | null;
 }
