@@ -5,6 +5,16 @@ export interface User {
     avatar?: string; // Avatar hash or URL (optional)
     metadata?: Record<string, string>; // Additional user-specific metadata
   }
+
+export interface NFLPlayer {
+  player_id: string;
+  position?: string;
+  fantasy_positions?: string[];
+  full_name?: string;
+  first_name?: string;
+  last_name?: string;
+  team?: string;
+}
   
 
   export interface Matchup {
@@ -40,6 +50,11 @@ export interface User {
     season_type: string; // Type of the season (e.g., "regular")
     status: string; // League status (e.g., "active", "completed")
     total_rosters: number; // Total number of rosters in the league
+    settings?: {
+      last_scored_leg?: number;
+      leg?: number;
+      [key: string]: any;
+    };
     metadata?: Record<string, string>; // Additional league-specific metadata
     scoring_settings?: {
       pass_td?: number; // Points for passing touchdowns
@@ -69,6 +84,9 @@ export interface User {
   starters: StarterBreakdown[];
   starters_live_total: number;
   starters_projected_total: number;
+  starters_variance: number;
+  starters_standard_deviation: number;
+  above_median_probability: number;
   points?: number;
 }
 
@@ -78,6 +96,9 @@ export interface StarterBreakdown {
   team?: string;
   opponent?: string;
   game_id?: string;
+  position?: string;
+  seconds_remaining: number;
   live_points: number;
   projected_points: number;
+  variance: number;
 }

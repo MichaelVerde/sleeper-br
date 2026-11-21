@@ -1,154 +1,269 @@
 <script setup lang="ts">
-import { ChevronLeft, ChevronRight, LoaderCircle } from 'lucide-vue-next';
-import { ref, onMounted, computed } from 'vue';
+import { LoaderCircle } from 'lucide-vue-next';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import Button from '~/components/ui/button/Button.vue';
 import { useSleeper } from '~/composables/useSleeperAPI';
 import type { LeagueInfo, Matchup, MatchupResult, NFLSeasonInfo, Roster, User } from '~/types/sleeper';
 
-const { getLeagueInfo, getMatchups, getUsers, getRosters, getNFLState, getAllProjections, getAllGames, calculateMatchupProjections } = useSleeper();
+const {
+  getLeagueInfo,
+  getMatchups,
+  getUsers,
+  getRosters,
+  getNFLState,
+  getNFLPlayerPositions,
+  calculateMatchupProjections
+} = useSleeper();
 
-// Access the `leagueId` from the route parameters
 const route = useRoute();
 const router = useRouter();
 const leagueId = computed(() => route.params.leagueId as string);
 
-// State to hold data
-const week = ref(); // Adjust this dynamically if needed
+const week = ref<number>();
 const leagueInfo = ref<LeagueInfo>();
 const nflState = ref<NFLSeasonInfo>();
 const matchups = ref<Matchup[]>([]);
 const rosters = ref<Roster[]>([]);
 const users = ref<User[]>([]);
 const matchupProjections = ref<MatchupResult[]>([]);
-const loading = ref<boolean>(true)
-let timerId: NodeJS.Timeout | undefined;
+const playerPositions = ref<Record<string, string>>({});
+const loading = ref(true);
+let timerId: ReturnType<typeof setInterval> | undefined;
 
-// Fetch data when the component is mounted
+const reloadMatchups = async () => {
+  if (!week.value) return;
+
+  try {
+    matchups.value = await getMatchups(leagueId.value, week.value);
+    matchupProjections.value = await calculateMatchupProjections(
+      leagueInfo.value?.season ?? nflState.value?.season ?? String(new Date().getFullYear()),
+      week.value,
+      matchups.value,
+      playerPositions.value,
+      Number(leagueInfo.value?.season) < Number(nflState.value?.season)
+        || (leagueInfo.value?.season === nflState.value?.season && week.value < nflState.value.week)
+    );
+  } catch (error) {
+    console.error('Error refreshing matchup data:', error);
+  } finally {
+    loading.value = false;
+  }
+};
+
 onMounted(async () => {
-  if (process.client) {
-    try {
-      loading.value = true;
-      leagueInfo.value = await getLeagueInfo(leagueId.value);
-      leagueInfo.value = await getLeagueInfo(leagueId.value);
-      console.log(leagueInfo.value)
-      nflState.value = await getNFLState();
-      week.value = nflState.value.week;
-      users.value = await getUsers(leagueId.value);
-      rosters.value = await getRosters(leagueId.value);
-    } catch (error) {
-      router.replace('/');
-      console.error('Error fetching data:', error);
-    }
+  if (!process.client) return;
 
-    timerId = setInterval(async () => { await reloadMatchups(); }, 60000); // 60000ms = 1 minute
+  try {
+    loading.value = true;
+    [leagueInfo.value, nflState.value] = await Promise.all([
+      getLeagueInfo(leagueId.value),
+      getNFLState()
+    ]);
+    [users.value, rosters.value, playerPositions.value] = await Promise.all([
+      getUsers(leagueId.value),
+      getRosters(leagueId.value),
+      getNFLPlayerPositions()
+    ]);
+    week.value = nflState.value.week;
+    timerId = setInterval(reloadMatchups, 60000);
+  } catch (error) {
+    console.error('Error fetching league data:', error);
+    await router.replace('/');
   }
 });
 
-watch(week, async() => {
- await reloadMatchups();
-})
-
-const reloadMatchups = async () => {
-  matchups.value = await getMatchups(leagueId.value, week.value);  
-  matchupProjections.value = await calculateMatchupProjections(
-    nflState.value,
-    week.value,
-    matchups.value
-  );  
-  console.log(matchupProjections.value)
-  loading.value = false;
-}
+watch(week, reloadMatchups);
 
 const increaseWeek = () => {
-  if (week.value < 18) {
-    week.value++;
-  }
+  if (week.value && week.value < 18) week.value++;
 };
 
 const decreaseWeek = () => {
-  if (week.value > 1) {
-    week.value--;
-  }
+  if (week.value && week.value > 1) week.value--;
 };
 
-const getRosterId = (userId:string ):number | undefined => {
-  return rosters.value.find(r => r.owner_id === userId)?.roster_id;
+const rosterByOwner = computed(() => new Map(
+  rosters.value.map(roster => [roster.owner_id, roster])
+));
+
+const pointsByRoster = computed(() => new Map(
+  matchupProjections.value.map(result => [result.roster_id, result])
+));
+
+const getPoints = (userId: string): MatchupResult | undefined => {
+  const rosterId = rosterByOwner.value.get(userId)?.roster_id;
+  return rosterId === undefined ? undefined : pointsByRoster.value.get(rosterId);
 };
 
-const getPoints = (userId:string):MatchupResult | undefined => {
-  const rosterId = getRosterId(userId);
-  return matchupProjections.value.find(m => m.roster_id === rosterId);
-};
+const sortedUsers = computed(() => [...users.value].sort((a, b) => {
+  const probabilityDifference = (getPoints(b.user_id)?.above_median_probability ?? 0)
+    - (getPoints(a.user_id)?.above_median_probability ?? 0);
+  if (probabilityDifference !== 0) return probabilityDifference;
 
-const sortedUsers = computed(() => {
-  return users.value.sort((a, b) => {
-    return (getPoints(b.user_id)?.starters_projected_total ?? 0) - (getPoints(a.user_id)?.starters_projected_total ?? 0);
-  })
-})
+  return (getPoints(b.user_id)?.starters_projected_total ?? 0)
+    - (getPoints(a.user_id)?.starters_projected_total ?? 0);
+}));
 
-const medianIdx = computed(() => {
-    return users.value.length / 2;
-})
+const medianIndex = computed(() => Math.floor(sortedUsers.value.length / 2));
 
-onUnmounted(() => {
-  clearInterval(timerId);
+const projectedMedian = computed(() => {
+  const projections = matchupProjections.value
+    .map(result => result.starters_projected_total)
+    .sort((a, b) => a - b);
+  if (!projections.length) return 0;
+
+  const middle = Math.floor(projections.length / 2);
+  return projections.length % 2
+    ? projections[middle]
+    : (projections[middle - 1] + projections[middle]) / 2;
 });
 
+const projectionScale = computed(() => {
+  if (!matchupProjections.value.length) return { minimum: 0, maximum: 1 };
+
+  const ranges = matchupProjections.value.flatMap(result => [
+    result.starters_projected_total - result.starters_standard_deviation,
+    result.starters_projected_total + result.starters_standard_deviation,
+    Number(result.points ?? 0)
+  ]);
+  const minimum = Math.min(projectedMedian.value, ...ranges);
+  const maximum = Math.max(projectedMedian.value, ...ranges);
+  const padding = Math.max((maximum - minimum) * 0.08, 2);
+  return { minimum: minimum - padding, maximum: maximum + padding };
+});
+
+const scalePosition = (score: number) => {
+  const span = projectionScale.value.maximum - projectionScale.value.minimum;
+  if (!span) return 50;
+  return Math.min(100, Math.max(0, (score - projectionScale.value.minimum) / span * 100));
+};
+
+const rangeStyle = (result: MatchupResult | undefined) => {
+  if (!result) return { left: '50%', width: '0%' };
+  const low = scalePosition(result.starters_projected_total - result.starters_standard_deviation);
+  const high = scalePosition(result.starters_projected_total + result.starters_standard_deviation);
+  return { left: `${low}%`, width: `${Math.max(high - low, 0)}%` };
+};
+
+const getAvatarUrl = (user: User) => {
+  const avatar = user.metadata?.avatar ?? user.avatar;
+  if (!avatar) return undefined;
+  return avatar.startsWith('http') ? avatar : `https://sleepercdn.com/avatars/${avatar}`;
+};
+
+onUnmounted(() => {
+  if (timerId) clearInterval(timerId);
+});
 </script>
 
 <template>
-  <div v-if="loading" class="rounded-2 w-full h-1/2 p-4">
+  <div v-if="loading" class="flex min-h-[50vh] items-center justify-center text-slate-500">
     <LoaderCircle class="mr-2 animate-spin" />
+    Loading league…
   </div>
-  <div class="container mx-auto py-8" v-else>
-    <!-- Week Controls with Buttons -->
-    <div class="flex justify-center items-center gap-4 mb-6">
-      <Button size="icon" variant="outline"
-        @click="decreaseWeek"
-      >
-        <ChevronLeft></ChevronLeft>
-      </Button>
-      <span class="text-xl font-semibold">Week {{ week }}</span>
-      <Button size="icon" variant="outline"
-        @click="increaseWeek"
-      >
-        <ChevronRight></ChevronRight>
-      </Button>
-    </div>
-    <div class="flex flex-col gap-2">
-      <template v-for="(user, index) in sortedUsers"
-        :key="user.user_id">
-        <div class="bg-white shadow-md rounded-lg p-4 flex items-center space-x-4 hover:shadow-lg transition-shadow justify-between"
-        >
-          <div class="flex items-center gap-4">
-            <img
-              v-if="user.metadata?.avatar ?? user.avatar"
-              :src="user.metadata?.avatar ?? `https://sleepercdn.com/avatars/${user.avatar}`"
-              :alt="user.display_name"
-              class="w-16 h-16 rounded-full object-cover border-2 border-gray-200"
-            />
-            <div>   
-              <p class="text-lg font-medium text-gray-800">{{ user.metadata?.team_name ?? `Team ${ user.display_name}` }}</p>
-              <p class="text-sm font-normal text-gray-800">@{{ user.display_name }}</p>
+
+  <main v-else class="min-h-screen bg-slate-50">
+    <div class="container mx-auto max-w-5xl px-3 py-4 sm:px-4 sm:py-8">
+      <LeagueHeader
+        :league-id="leagueId"
+        :league-name="leagueInfo?.name"
+        active="battle-royale"
+        :week="week"
+        @previous-week="decreaseWeek"
+        @next-week="increaseWeek"
+      />
+
+      <div class="flex flex-col gap-3">
+        <template v-for="(user, index) in sortedUsers" :key="user.user_id">
+          <article class="relative overflow-hidden rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200 transition-shadow hover:shadow-md">
+            <div
+              v-if="index < medianIndex"
+              class="absolute inset-y-0 left-0 w-1 bg-emerald-500"
+              aria-label="Currently projected above league median"
+            ></div>
+
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex min-w-0 items-center gap-3">
+                <img
+                  v-if="getAvatarUrl(user)"
+                  :src="getAvatarUrl(user)"
+                  :alt="user.display_name"
+                  class="h-11 w-11 flex-none rounded-full border-2 border-slate-200 object-cover sm:h-12 sm:w-12"
+                />
+                <div class="min-w-0">
+                  <p class="truncate font-semibold text-slate-900">
+                    {{ user.metadata?.team_name ?? `Team ${user.display_name}` }}
+                  </p>
+                  <p class="truncate text-sm text-slate-500">@{{ user.display_name }}</p>
+                </div>
+              </div>
+
+              <span
+                class="flex-none rounded-full bg-blue-50 px-3 py-1 text-lg font-bold tabular-nums text-blue-700 ring-1 ring-blue-100"
+                :aria-label="`${user.display_name} win probability`"
+                title="Win probability"
+              >
+                {{ ((getPoints(user.user_id)?.above_median_probability ?? 0) * 100).toFixed(0) }}%
+              </span>
             </div>
-          </div>
-          <div>
-            <div class="text-right">
-              <p class="text-lg font-semibold text-blue-600">{{ getPoints(user.user_id)?.points?.toFixed(2) ?? 0 }} pts</p>                            
-              <p class="text-md italic text-gray-600">{{ getPoints(user.user_id)?.starters_projected_total.toFixed(2) ?? 0 }} pts</p>              
+
+            <div class="mt-4">
+              <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
+                <span class="text-slate-500">
+                  Actual
+                  <strong class="ml-1 font-semibold tabular-nums text-slate-900">
+                    {{ getPoints(user.user_id)?.points?.toFixed(1) ?? '0.0' }}
+                  </strong>
+                </span>
+                <span class="text-slate-500">
+                  Projected
+                  <strong class="ml-1 font-semibold tabular-nums text-blue-700">
+                    {{ getPoints(user.user_id)?.starters_projected_total.toFixed(1) ?? '0.0' }}
+                  </strong>
+                  <span class="ml-1 tabular-nums text-slate-400">
+                    ± {{ getPoints(user.user_id)?.starters_standard_deviation.toFixed(1) ?? '0.0' }}
+                  </span>
+                </span>
+              </div>
+
+              <div class="relative mt-2 h-7" :aria-label="`Score and projection range for ${user.display_name}`">
+                <div class="absolute left-0 right-0 top-1/2 h-3 -translate-y-1/2 rounded-full bg-slate-100"></div>
+                <div
+                  class="absolute right-0 top-1/2 z-0 h-3 -translate-y-1/2 rounded-r-full border-l-2 border-emerald-500 bg-emerald-200/80"
+                  :style="{ left: `${scalePosition(projectedMedian)}%` }"
+                  title="Winning range above the projected median"
+                ></div>
+                <div
+                  class="absolute top-1/2 z-10 h-1.5 -translate-y-1/2 rounded-full bg-blue-400"
+                  :style="rangeStyle(getPoints(user.user_id))"
+                >
+                  <span class="absolute -left-px -top-1 h-3.5 w-px bg-blue-600"></span>
+                  <span class="absolute -right-px -top-1 h-3.5 w-px bg-blue-600"></span>
+                </div>
+                <div
+                  class="absolute top-1/2 z-20 h-4 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-800 ring-2 ring-white"
+                  :style="{ left: `${scalePosition(getPoints(user.user_id)?.points ?? 0)}%` }"
+                  title="Actual score"
+                ></div>
+                <div
+                  class="absolute top-1/2 z-20 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow"
+                  :style="{ left: `${scalePosition(getPoints(user.user_id)?.starters_projected_total ?? 0)}%` }"
+                  title="Projected score"
+                ></div>
+              </div>
             </div>
+          </article>
+
+          <div
+            v-if="index === medianIndex - 1"
+            class="flex items-center gap-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-amber-600"
+          >
+            <span class="h-px flex-1 bg-amber-500"></span>
+            Projected BR Win Score {{ projectedMedian.toFixed(1) }}
+            <span class="h-px flex-1 bg-amber-500"></span>
           </div>
-        </div>
-        <div v-if="index === medianIdx -1" class="bg-primary w-full flex flex-col justify-center items-center rounded">
-          <div class="text-lg font-medium text-white p-2 w-full flex flex-col justify-center items-center">
-            ▲ Battle Royale Winners ▲
-          </div>
-          <div class="text-lg font-medium text-white p-2 border-t border-white w-full flex flex-col justify-center items-center">
-            ▼ Battle Royale Losers ▼
-          </div>
-        </div>
-    </template>
+        </template>
+      </div>
     </div>
-  </div>
+  </main>
 </template>
