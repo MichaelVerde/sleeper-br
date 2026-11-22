@@ -40,6 +40,17 @@ export const isGameFinal = (game: Game | undefined): boolean => {
   );
 };
 
+export const getMatchupPlayerPoints = (
+  matchup: Matchup,
+  playerId: string,
+  starterIndex: number
+): number | undefined => {
+  const points = matchup.players_points?.[playerId] ?? matchup.starters_points?.[starterIndex];
+  return points === undefined || points === null || !Number.isFinite(Number(points))
+    ? undefined
+    : Number(points);
+};
+
 const getSecondsRemaining = (game: Game | undefined): number => {
   const metadata = game?.metadata;
   const quarter = metadata?.quarter;

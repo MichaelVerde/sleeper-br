@@ -2,7 +2,7 @@
 import { Beer, LoaderCircle } from 'lucide-vue-next';
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { isGameFinal, useSleeper } from '~/composables/useSleeperAPI';
+import { getMatchupPlayerPoints, isGameFinal, useSleeper } from '~/composables/useSleeperAPI';
 import type { Game, PlayerStats } from '~/composables/useGraphQL';
 import type { LeagueInfo, Matchup, NFLSeasonInfo, Roster, User } from '~/types/sleeper';
 
@@ -89,7 +89,13 @@ const calculateStandings = (weeklyMatchups: WeeklyLeagueData[]) => {
       if (!standing) continue;
 
       standing.pointsFor += Number(matchup.points ?? 0);
-      for (const playerId of matchup.starters) {
+      for (const [starterIndex, playerId] of matchup.starters.entries()) {
+        const matchupPoints = getMatchupPlayerPoints(matchup, playerId, starterIndex);
+        if (matchupPoints !== undefined) {
+          if (matchupPoints <= 0) standing.shotguns++;
+          continue;
+        }
+
         const live = liveByPlayer.get(playerId);
         const projection = projectionByPlayer.get(playerId);
         const game = gameById.get(String(live?.game_id || projection?.game_id || ''));

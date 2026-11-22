@@ -22,7 +22,9 @@ export interface NFLPlayer {
     roster_id: number; // Roster ID participating in the matchup
     points: number; // Total points scored by the roster for the week
     starters: string[]; // Array of player IDs in the starting lineup
+    starters_points?: number[]; // Scores corresponding to the ordered starters
     players: string[]; // Array of all player IDs in the roster
+    players_points?: Record<string, number>; // Week-specific score keyed by player ID
     custom_points?: number; // Custom points if any (optional)
   }
   

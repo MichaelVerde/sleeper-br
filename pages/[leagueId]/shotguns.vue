@@ -2,7 +2,7 @@
 import { Beer, Clock3, LoaderCircle } from 'lucide-vue-next';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { isGameFinal, useSleeper } from '~/composables/useSleeperAPI';
+import { getMatchupPlayerPoints, isGameFinal, useSleeper } from '~/composables/useSleeperAPI';
 import type { Game, PlayerStats } from '~/composables/useGraphQL';
 import type { LeagueInfo, Matchup, NFLPlayer, NFLSeasonInfo, Roster, User } from '~/types/sleeper';
 
@@ -20,7 +20,7 @@ interface ShotgunIncident {
 }
 
 interface TeamShotguns {
-  roster: Roster;
+  rosterId: number;
   user?: User;
   incidents: ShotgunIncident[];
 }
@@ -46,6 +46,7 @@ const players = ref<Record<string, NFLPlayer>>({});
 const week = ref<number>();
 const teams = ref<TeamShotguns[]>([]);
 const loading = ref(true);
+let loadRequest = 0;
 
 const formatDeadline = (date: Date) => new Intl.DateTimeFormat('en-CA', {
   weekday: 'short',
@@ -72,16 +73,20 @@ const getPendingState = (game: Game) => {
 
 const loadWeek = async () => {
   if (!week.value || !leagueInfo.value) return;
+  const selectedWeek = week.value;
+  const request = ++loadRequest;
   loading.value = true;
 
   try {
     const season = leagueInfo.value.season;
-    const matchups = await getMatchups(leagueId.value, week.value);
+    const matchups = await getMatchups(leagueId.value, selectedWeek);
     const [stats, games, nextWeekGames] = await Promise.all([
-      getAllProjections(season, week.value, matchups),
-      getAllGames(season, week.value),
-      week.value < 18 ? getAllGames(season, week.value + 1) : Promise.resolve([] as Game[])
+      getAllProjections(season, selectedWeek, matchups),
+      getAllGames(season, selectedWeek),
+      selectedWeek < 18 ? getAllGames(season, selectedWeek + 1) : Promise.resolve([] as Game[])
     ]);
+
+    if (request !== loadRequest) return;
 
     const liveByPlayer = new Map<string, PlayerStats>();
     for (const stat of stats.live) {
@@ -96,42 +101,52 @@ const loadWeek = async () => {
       ? new Date(Math.min(...nextWeekGames.map(game => Number(game.start_time))))
       : undefined;
     const userById = new Map(users.value.map(user => [user.user_id, user]));
-    const matchupByRoster = new Map(matchups.map(matchup => [matchup.roster_id, matchup]));
+    const currentRosterById = new Map(rosters.value.map(roster => [roster.roster_id, roster]));
+    const viewingPastWeek = Number(season) < Number(nflState.value?.season)
+      || (season === nflState.value?.season && selectedWeek < (nflState.value?.week ?? selectedWeek));
 
-    teams.value = rosters.value.map(roster => {
-      const matchup = matchupByRoster.get(roster.roster_id);
+    // Matchups are the historical source of truth for a week's roster. The
+    // league rosters endpoint only represents the roster as it exists today.
+    teams.value = matchups.map(matchup => {
       const incidents: ShotgunIncident[] = [];
 
-      for (const playerId of matchup?.starters ?? []) {
+      for (const [starterIndex, playerId] of (matchup.starters ?? []).entries()) {
         const live = liveByPlayer.get(playerId);
         const projection = projectionByPlayer.get(playerId);
         const game = gameById.get(String(live?.game_id || projection?.game_id || ''));
+        const matchupPoints = getMatchupPlayerPoints(matchup, playerId, starterIndex);
         const hasStarted = Boolean(
           game?.metadata?.has_started
             || game?.metadata?.is_in_progress
             || isGameFinal(game)
             || (game?.start_time && Number(game.start_time) <= Date.now())
         );
-        if (!game || !hasStarted) continue;
+        if ((!game || !hasStarted) && !(viewingPastWeek && matchupPoints !== undefined)) continue;
 
-        const points = Number(live?.stats?.pts_half_ppr ?? 0);
+        // Sleeper stores these scores with the historical matchup, so they
+        // remain accurate after a player or defense leaves the current roster.
+        const points = matchupPoints ?? Number(live?.stats?.pts_half_ppr ?? 0);
         if (points > 0) continue;
 
-        const confirmed = isGameFinal(game);
-        const viewingPastWeek = Number(season) < Number(nflState.value?.season)
-          || (season === nflState.value?.season && week.value < (nflState.value?.week ?? week.value));
+        const confirmed = viewingPastWeek && matchupPoints !== undefined
+          ? true
+          : isGameFinal(game);
         if (!confirmed && viewingPastWeek) continue;
 
-        const pendingState = getPendingState(game);
+        const pendingState = game
+          ? getPendingState(game)
+          : { label: 'Drink Up, Bud', stage: 'dire' as const };
         let dueAt: Date | undefined;
         let dueText = 'Deadline will be set when the game is final';
 
-        if (confirmed && points < 0) {
+        if (confirmed && points < 0 && game?.start_time) {
           dueAt = new Date(Number(game.start_time) + 28 * 60 * 60 * 1000);
           dueText = `Negative score · due within 24h of final (estimated ${formatDeadline(dueAt)})`;
+        } else if (confirmed && points < 0) {
+          dueText = 'Negative score · due within 24h of final';
         } else if (confirmed && nextKickoff) {
           dueAt = nextKickoff;
-          dueText = `Zero score · due before Week ${week.value + 1} kickoff (${formatDeadline(dueAt)})`;
+          dueText = `Zero score · due before Week ${selectedWeek + 1} kickoff (${formatDeadline(dueAt)})`;
         } else if (confirmed) {
           dueText = 'Zero score · due before the next week’s games';
         }
@@ -139,11 +154,13 @@ const loadWeek = async () => {
         const player = players.value[playerId];
         incidents.push({
           playerId,
-          playerName: player?.full_name
+          playerName: playerId === '0'
+            ? 'No Starter'
+            : player?.full_name
             || [player?.first_name, player?.last_name].filter(Boolean).join(' ')
             || playerId,
           position: player?.position || player?.fantasy_positions?.[0],
-          nflTeam: live?.team || projection?.team || player?.team,
+          nflTeam: live?.team || projection?.team || player?.team || (playerId.length <= 3 ? playerId : undefined),
           points,
           status: confirmed ? 'confirmed' : 'pending',
           pendingLabel: pendingState.label,
@@ -154,12 +171,18 @@ const loadWeek = async () => {
       }
 
       incidents.sort((a, b) => a.points - b.points || a.playerName.localeCompare(b.playerName));
-      return { roster, user: userById.get(roster.owner_id), incidents };
+      const currentRoster = currentRosterById.get(matchup.roster_id);
+      return {
+        rosterId: matchup.roster_id,
+        user: currentRoster ? userById.get(currentRoster.owner_id) : undefined,
+        incidents
+      };
     });
   } catch (error) {
+    if (request !== loadRequest) return;
     console.error('Error loading shotgun tracker:', error);
   } finally {
-    loading.value = false;
+    if (request === loadRequest) loading.value = false;
   }
 };
 
@@ -196,7 +219,7 @@ const viewingPastWeek = computed(() => Boolean(
 ));
 
 function teamName(team: TeamShotguns) {
-  return team.user?.metadata?.team_name ?? team.user?.display_name ?? `Team ${team.roster.roster_id}`;
+  return team.user?.metadata?.team_name ?? team.user?.display_name ?? `Team ${team.rosterId}`;
 }
 
 function incidentBadgeClass(incident: ShotgunIncident) {
@@ -246,7 +269,7 @@ const decreaseWeek = () => {
         <div v-if="sortedTeams.length" class="grid gap-4 md:grid-cols-2">
           <article
             v-for="team in sortedTeams"
-            :key="team.roster.roster_id"
+            :key="team.rosterId"
             class="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200"
           >
             <header class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
@@ -263,7 +286,7 @@ const decreaseWeek = () => {
             </header>
 
             <div class="divide-y divide-slate-100">
-              <div v-for="incident in team.incidents" :key="incident.playerId" class="p-4">
+              <div v-for="(incident, incidentIndex) in team.incidents" :key="`${incident.playerId}-${incidentIndex}`" class="p-4">
                 <div class="flex items-start justify-between gap-3">
                   <div class="flex min-w-0 items-start gap-2">
                     <Beer v-if="incident.status === 'confirmed'" class="mt-0.5 h-5 w-5 flex-none text-emerald-600" />
