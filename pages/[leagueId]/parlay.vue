@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import {
   ArrowLeft,
-  Check,
-  Clock3,
+  Crown,
+  Info,
   LoaderCircle,
-  Minus,
   RefreshCw,
   Trophy,
   X
@@ -13,7 +12,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { isGameFinal, useSleeper } from '~/composables/useSleeperAPI';
 import type { Game, PlayerStats } from '~/composables/useGraphQL';
-import type { LeagueInfo, User } from '~/types/sleeper';
+import type { LeagueInfo, Matchup, Roster, User } from '~/types/sleeper';
 
 type LegKind = 'anytime_td' | 'receiving_yards_over' | 'spread';
 type LegStatus = 'hit' | 'miss' | 'push' | 'live' | 'pending';
@@ -30,6 +29,8 @@ interface ParlayLeg {
 interface EvaluatedLeg extends ParlayLeg {
   status: LegStatus;
   detail: string;
+  cuckIndex: number;
+  cuckReasons: string[];
   member: { userId: string; sleeperName: string };
   user?: User;
 }
@@ -80,12 +81,15 @@ const parlay: ParlayLeg[] = [
   { submittedName: 'Gav', kind: 'anytime_td', playerId: '13337', playerName: 'Emmett Johnson', team: 'KC' }
 ];
 
-const { getAllGames, getLeagueInfo, getPlayerStats, getUsers } = useSleeper();
+const { getAllGames, getLeagueInfo, getMatchups, getPlayerStats, getRosters, getUsers } = useSleeper();
 const route = useRoute();
 const leagueId = computed(() => route.params.leagueId as string);
 const configured = computed(() => leagueId.value === CONFIGURED_LEAGUE_ID);
 const leagueInfo = ref<LeagueInfo>();
 const users = ref<User[]>([]);
+const rosters = ref<Roster[]>([]);
+const weekMatchups = ref<Matchup[]>([]);
+const historicalMatchups = ref<Matchup[]>([]);
 const games = ref<Game[]>([]);
 const liveStats = ref<PlayerStats[]>([]);
 const projections = ref<PlayerStats[]>([]);
@@ -93,6 +97,9 @@ const loading = ref(true);
 const refreshing = ref(false);
 const errorMessage = ref('');
 const lastUpdated = ref<Date>();
+const cuckLegendOpen = ref(false);
+const selectedCuckIndex = ref<number>();
+const selectedCuckName = ref('');
 let timerId: ReturnType<typeof setInterval> | undefined;
 
 const gameHasStarted = (game: Game | undefined) => Boolean(
@@ -140,10 +147,17 @@ onMounted(async () => {
   }
 
   try {
-    [leagueInfo.value, users.value] = await Promise.all([
+    [leagueInfo.value, users.value, rosters.value] = await Promise.all([
       getLeagueInfo(leagueId.value),
-      getUsers(leagueId.value)
+      getUsers(leagueId.value),
+      getRosters(leagueId.value)
     ]);
+    const weeklyMatchups = await Promise.all(
+      Array.from({ length: PARLAY_WEEK }, (_, index) => index + 1)
+        .map(week => getMatchups(leagueId.value, week))
+    );
+    weekMatchups.value = weeklyMatchups[PARLAY_WEEK - 1] ?? [];
+    historicalMatchups.value = weeklyMatchups.slice(0, -1).flat();
     await refresh();
     timerId = setInterval(refresh, 60000);
   } catch (error) {
@@ -162,6 +176,8 @@ const evaluatedLegs = computed<EvaluatedLeg[]>(() => {
   const liveByPlayer = new Map(liveStats.value.map(stat => [String(stat.player_id), stat]));
   const projectionByPlayer = new Map(projections.value.map(stat => [String(stat.player_id), stat]));
   const gameById = new Map(games.value.map(game => [String(game.game_id), game]));
+  const rosterByOwner = new Map(rosters.value.map(roster => [roster.owner_id, roster]));
+  const matchupByRoster = new Map(weekMatchups.value.map(matchup => [matchup.roster_id, matchup]));
 
   return parlay.map(leg => {
     const member = LEAGUE_MEMBERS[leg.submittedName];
@@ -172,9 +188,61 @@ const evaluatedLegs = computed<EvaluatedLeg[]>(() => {
         candidate.metadata?.home_team === leg.team || candidate.metadata?.away_team === leg.team
       ));
     const user = userById.get(member.userId);
+    const bettorRoster = rosterByOwner.get(member.userId);
+    const playerRoster = leg.playerId
+      ? rosters.value.find(roster => roster.players?.includes(leg.playerId!))
+      : undefined;
+    const cuckReasons: string[] = [];
+    let cuckIndex = 0;
+
+    if (leg.playerId && bettorRoster) {
+      if (playerRoster && playerRoster.roster_id !== bettorRoster.roster_id) {
+        cuckIndex += 1;
+        cuckReasons.push('on another roster');
+
+        const bettorMatchup = matchupByRoster.get(bettorRoster.roster_id);
+        const playerMatchup = matchupByRoster.get(playerRoster.roster_id);
+        if (bettorMatchup && playerMatchup && bettorMatchup.matchup_id === playerMatchup.matchup_id) {
+          cuckIndex += 2;
+          cuckReasons.push('facing them this week');
+        }
+      }
+
+      const previouslyOwned = historicalMatchups.value.some(matchup => (
+        matchup.roster_id === bettorRoster.roster_id && matchup.players?.includes(leg.playerId!)
+      ));
+      const currentlyOwned = bettorRoster.players?.includes(leg.playerId!);
+      if (previouslyOwned && !currentlyOwned) {
+        cuckIndex += 2;
+        cuckReasons.push('formerly owned');
+      }
+    }
+
+    const evaluate = (status: LegStatus, detail: string): EvaluatedLeg => {
+      let settledCuckIndex = cuckIndex;
+      const settledReasons = [...cuckReasons];
+
+      if (leg.playerId && status === 'hit') {
+        settledCuckIndex = Math.max(0, settledCuckIndex - 1);
+        settledReasons.push('hit the bet and clawed back some dignity');
+      } else if (leg.playerId && status === 'miss') {
+        settledCuckIndex += 2;
+        settledReasons.push('missed the bet and watched the bull cash');
+      }
+
+      return {
+        ...leg,
+        member,
+        user,
+        status,
+        detail,
+        cuckIndex: settledCuckIndex,
+        cuckReasons: settledReasons
+      };
+    };
 
     if (!game) {
-      return { ...leg, member, user, status: 'pending', detail: 'Game data unavailable' };
+      return evaluate('pending', 'Game data unavailable');
     }
 
     const final = isGameFinal(game);
@@ -182,7 +250,7 @@ const evaluatedLegs = computed<EvaluatedLeg[]>(() => {
 
     if (leg.kind === 'spread') {
       if (!started) {
-        return { ...leg, member, user, status: 'pending', detail: `Kickoff ${formatKickoff(game)}` };
+        return evaluate('pending', `Kickoff ${formatKickoff(game)}`);
       }
 
       const isHome = game.metadata.home_team === leg.team;
@@ -198,11 +266,11 @@ const evaluatedLegs = computed<EvaluatedLeg[]>(() => {
         : marginAgainstSpread < 0
           ? `short by ${Math.abs(marginAgainstSpread).toFixed(1)}`
           : 'on the number';
-      return { ...leg, member, user, status, detail: `${score} · ${coverDetail}` };
+      return evaluate(status, `${score} · ${coverDetail}`);
     }
 
     if (!started) {
-      return { ...leg, member, user, status: 'pending', detail: `Kickoff ${formatKickoff(game)}` };
+      return evaluate('pending', `Kickoff ${formatKickoff(game)}`);
     }
 
     const stats = live?.stats ?? {};
@@ -212,7 +280,7 @@ const evaluatedLegs = computed<EvaluatedLeg[]>(() => {
       const status: LegStatus = yards > Number(leg.line)
         ? 'hit'
         : final ? 'miss' : started ? 'live' : 'pending';
-      return { ...leg, member, user, status, detail: `${gameStage} – ${yards.toFixed(0)} receiving yards` };
+      return evaluate(status, `${gameStage} – ${yards.toFixed(0)} receiving yards`);
     }
 
     const touchdowns = ['rush_td', 'rec_td', 'kr_td', 'pr_td', 'fum_rec_td']
@@ -221,7 +289,7 @@ const evaluatedLegs = computed<EvaluatedLeg[]>(() => {
       ? 'hit'
       : final ? 'miss' : started ? 'live' : 'pending';
     const touchdownText = touchdowns === 1 ? '1 touchdown' : `${touchdowns} touchdowns`;
-    return { ...leg, member, user, status, detail: `${gameStage} – ${touchdownText}` };
+    return evaluate(status, `${gameStage} – ${touchdownText}`);
   });
 });
 
@@ -229,6 +297,12 @@ const statusCounts = computed(() => evaluatedLegs.value.reduce((counts, leg) => 
   counts[leg.status]++;
   return counts;
 }, { hit: 0, miss: 0, push: 0, live: 0, pending: 0 } as Record<LegStatus, number>));
+
+const biggestCuck = computed(() => evaluatedLegs.value
+  .filter(leg => Boolean(leg.playerId))
+  .reduce<EvaluatedLeg | undefined>((biggest, leg) => (
+    !biggest || leg.cuckIndex > biggest.cuckIndex ? leg : biggest
+  ), undefined));
 
 const parlayStatus = computed(() => {
   if (statusCounts.value.miss > 0) return { label: 'Parlay busted', class: 'bg-rose-500/15 text-rose-200 ring-rose-400/20' };
@@ -245,13 +319,41 @@ const statusLabel = (status: LegStatus) => ({
   pending: 'Pending'
 }[status]);
 
-const statusClasses = (status: LegStatus) => ({
-  hit: 'bg-emerald-100 text-emerald-700 ring-emerald-200',
-  miss: 'bg-rose-100 text-rose-700 ring-rose-200',
-  push: 'bg-slate-100 text-slate-600 ring-slate-200',
-  live: 'bg-amber-100 text-amber-700 ring-amber-200',
-  pending: 'bg-sky-100 text-sky-700 ring-sky-200'
+const cardClasses = (status: LegStatus) => ({
+  hit: 'bg-emerald-50 ring-emerald-200',
+  miss: 'bg-rose-50 ring-rose-200',
+  push: 'bg-slate-50 ring-slate-200',
+  live: 'bg-amber-50 ring-amber-200',
+  pending: 'bg-sky-50 ring-sky-200'
 }[status]);
+
+const statusTextClasses = (status: LegStatus) => ({
+  hit: 'text-emerald-700',
+  miss: 'text-rose-700',
+  push: 'text-slate-600',
+  live: 'text-amber-700',
+  pending: 'text-sky-700'
+}[status]);
+
+const CUCK_RANKS = [
+  'No Cuckery Detected',
+  'Cuck Curious',
+  'Peeking Through the Keyhole',
+  'Holding the Bull’s Pants',
+  'Certified Bedroom Cuck',
+  'Hotel-Chair Masturbator',
+  'The Bull’s Cleanup Crew',
+  'Intergalactic Mega-Cuck'
+];
+const cuckRank = (index: number) => CUCK_RANKS[Math.min(index, CUCK_RANKS.length - 1)];
+const openCuckLegend = (leg?: EvaluatedLeg) => {
+  selectedCuckIndex.value = leg?.cuckIndex;
+  selectedCuckName.value = leg?.submittedName ?? '';
+  cuckLegendOpen.value = true;
+};
+const closeCuckLegend = () => {
+  cuckLegendOpen.value = false;
+};
 
 const teamName = (team: string) => NFL_TEAM_NAMES[team] ?? team;
 const subjectName = (leg: ParlayLeg) => leg.playerName ?? teamName(leg.team);
@@ -332,19 +434,51 @@ const hideBrokenImage = (event: Event) => {
           {{ errorMessage }}
         </p>
 
-        <section class="mt-4 grid gap-3">
+        <div v-if="biggestCuck" class="mt-4">
+          <button
+            type="button"
+            class="flex w-full items-center gap-3 rounded-xl bg-fuchsia-950 p-4 text-left text-white shadow-lg ring-1 ring-fuchsia-800 transition hover:bg-fuchsia-900 sm:p-5"
+            @click="openCuckLegend(biggestCuck)"
+          >
+            <span class="flex h-11 w-11 flex-none items-center justify-center rounded-full bg-fuchsia-400/15 text-fuchsia-200 ring-1 ring-fuchsia-300/20">
+              <Crown class="h-5 w-5" />
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-300 sm:text-xs">This week’s biggest cuck</span>
+              <span class="mt-0.5 block truncate text-lg font-black">{{ biggestCuck.submittedName }}</span>
+              <span class="block text-sm font-bold text-fuchsia-200">{{ cuckRank(biggestCuck.cuckIndex) }}</span>
+            </span>
+            <span class="flex flex-none items-center gap-1.5 text-xs font-bold text-fuchsia-200 sm:text-sm">
+              <Info class="h-4 w-4" /> <span class="hidden sm:inline">View legend</span>
+            </span>
+          </button>
+        </div>
+
+        <section class="mt-2 grid gap-3">
           <article
             v-for="leg in evaluatedLegs"
             :key="leg.member.userId"
-            class="flex min-h-28 overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200"
+            class="flex min-h-28 overflow-hidden rounded-xl shadow-sm ring-1"
+            :class="cardClasses(leg.status)"
           >
-            <div class="flex w-28 flex-none flex-col justify-center border-r border-slate-100 bg-slate-50 px-3 py-4 sm:w-40 sm:px-4">
-              <p class="truncate font-bold text-slate-900">{{ leg.submittedName }}</p>
+            <div class="flex w-32 flex-none flex-col justify-center border-r border-white/70 bg-white/35 px-3 py-4 sm:w-48 sm:px-5">
+              <p class="mb-1 text-[10px] font-black uppercase tracking-wider sm:text-xs" :class="statusTextClasses(leg.status)">
+                {{ statusLabel(leg.status) }}
+              </p>
+              <p class="truncate text-base font-extrabold text-slate-900 sm:text-lg">{{ leg.submittedName }}</p>
               <p class="truncate text-xs text-slate-500 sm:text-sm">@{{ leg.user?.display_name ?? leg.member.sleeperName }}</p>
+              <button
+                v-if="leg.playerId"
+                type="button"
+                class="mt-3 rounded-md bg-fuchsia-500/10 px-2 py-1.5 text-left text-[10px] font-black leading-tight text-fuchsia-800 ring-1 ring-inset ring-fuchsia-500/15 hover:bg-fuchsia-500/20 sm:text-xs"
+                @click="openCuckLegend(leg)"
+              >
+                {{ cuckRank(leg.cuckIndex) }}
+              </button>
             </div>
 
-            <div class="flex min-w-0 flex-1 items-center gap-3 p-3 sm:gap-4 sm:p-4">
-              <div class="relative flex h-14 w-14 flex-none items-center justify-center overflow-hidden rounded-full bg-slate-100 text-xs font-black text-slate-400 ring-1 ring-slate-200 sm:h-16 sm:w-16">
+            <div class="flex min-w-0 flex-1 items-center gap-2.5 p-3 sm:gap-4 sm:p-4">
+              <div class="relative flex h-12 w-12 flex-none items-center justify-center overflow-hidden rounded-full bg-slate-100 text-xs font-black text-slate-400 ring-1 ring-slate-200 sm:h-16 sm:w-16">
                 <span>{{ leg.team }}</span>
                 <img
                   :src="subjectImage(leg)"
@@ -359,16 +493,8 @@ const hideBrokenImage = (event: Event) => {
                 <p class="truncate text-sm font-semibold text-slate-500">{{ teamName(leg.team) }}</p>
                 <p class="truncate font-extrabold text-slate-900 sm:text-lg">{{ subjectName(leg) }}</p>
                 <p class="mt-1 text-sm font-bold text-slate-700">{{ betLabel(leg) }}</p>
-                <p class="truncate text-xs font-medium text-slate-400 sm:text-sm">{{ leg.detail }}</p>
+                <p class="text-xs font-medium leading-4 text-slate-500 sm:text-sm">{{ leg.detail }}</p>
               </div>
-
-              <span class="inline-flex flex-none items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold uppercase tracking-wide ring-1 sm:px-2.5 sm:text-xs" :class="statusClasses(leg.status)">
-                <Check v-if="leg.status === 'hit'" class="h-3.5 w-3.5" />
-                <X v-else-if="leg.status === 'miss'" class="h-3.5 w-3.5" />
-                <Minus v-else-if="leg.status === 'push'" class="h-3.5 w-3.5" />
-                <Clock3 v-else class="h-3.5 w-3.5" />
-                {{ statusLabel(leg.status) }}
-              </span>
             </div>
           </article>
         </section>
@@ -378,5 +504,61 @@ const hideBrokenImage = (event: Event) => {
         </p>
       </template>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="cuckLegendOpen"
+        class="fixed inset-0 z-50 overflow-y-auto bg-white sm:flex sm:items-center sm:justify-center sm:bg-slate-950/60 sm:p-3 sm:backdrop-blur-sm"
+        @click.self="closeCuckLegend"
+      >
+        <section
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cuck-legend-title"
+          class="min-h-screen w-full bg-white p-5 sm:min-h-0 sm:max-h-[88vh] sm:max-w-lg sm:overflow-y-auto sm:rounded-2xl sm:p-6 sm:shadow-2xl"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-black uppercase tracking-[0.18em] text-fuchsia-600">Scouting report</p>
+              <h2 id="cuck-legend-title" class="mt-1 text-2xl font-black text-slate-900">Cuck Index legend</h2>
+              <p v-if="selectedCuckName && selectedCuckIndex !== undefined" class="mt-1 text-sm text-slate-500">
+                {{ selectedCuckName }}: <span class="font-bold text-fuchsia-700">{{ cuckRank(selectedCuckIndex) }}</span>
+              </p>
+            </div>
+            <button type="button" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close cuck legend" @click="closeCuckLegend">
+              <X class="h-5 w-5" />
+            </button>
+          </div>
+
+          <div class="mt-5 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200">
+            <h3 class="font-bold text-slate-900">How the damage is calculated</h3>
+            <ul class="mt-3 space-y-2 text-sm text-slate-600">
+              <li class="flex justify-between gap-4"><span>Player is on another fantasy roster</span><strong class="text-fuchsia-700">+1</strong></li>
+              <li class="flex justify-between gap-4"><span>That roster is this week’s opponent</span><strong class="text-fuchsia-700">+2</strong></li>
+              <li class="flex justify-between gap-4"><span>Picker formerly owned the player</span><strong class="text-fuchsia-700">+2</strong></li>
+              <li class="flex justify-between gap-4"><span>The bet hits</span><strong class="text-emerald-700">−1</strong></li>
+              <li class="flex justify-between gap-4"><span>The bet misses</span><strong class="text-rose-700">+2</strong></li>
+            </ul>
+          </div>
+
+          <div class="mt-5">
+            <h3 class="font-bold text-slate-900">Possible damage</h3>
+            <div class="mt-3 grid gap-2">
+              <div
+                v-for="(rank, index) in CUCK_RANKS"
+                :key="rank"
+                class="flex items-center gap-3 rounded-lg px-3 py-2 ring-1"
+                :class="selectedCuckIndex === index
+                  ? 'bg-fuchsia-50 text-fuchsia-900 ring-fuchsia-300'
+                  : 'bg-white text-slate-700 ring-slate-200'"
+              >
+                <span class="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-slate-900 text-xs font-black text-white">{{ index }}</span>
+                <span class="font-bold">{{ rank }}</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </main>
 </template>
