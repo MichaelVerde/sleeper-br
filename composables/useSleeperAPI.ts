@@ -258,13 +258,13 @@ export const useSleeper = () => {
 
   const { callGraphQL } = useGraphQL<any>();
 
-  const getAllProjections = async (
+  const getPlayerStats = async (
     year: string,
     week: number,
-    matchups: Matchup[]
+    playerIds: string[]
   ): Promise<{ projections: PlayerStats[]; live: PlayerStats[] }> => {
-    const allPlayerIds = matchups.flatMap(matchup => matchup.starters);
-    const playerIds = allPlayerIds.map(id => `"${id}"`).join(', ');
+    const uniquePlayerIds = [...new Set(playerIds)];
+    const formattedPlayerIds = uniquePlayerIds.map(id => `"${id}"`).join(', ');
     const query = `
       query get_player_score_and_projections_batch {
         projections: stats_for_players_in_week(
@@ -273,7 +273,7 @@ export const useSleeper = () => {
           category: "proj",
           season_type: "regular",
           week: ${week},
-          player_ids: [${playerIds}]
+          player_ids: [${formattedPlayerIds}]
         ) {
           game_id opponent player_id stats team week season
         }
@@ -284,7 +284,7 @@ export const useSleeper = () => {
           category: "stat",
           season_type: "regular",
           week: ${week},
-          player_ids: [${playerIds}]
+          player_ids: [${formattedPlayerIds}]
         ) {
           game_id opponent player_id stats team week season
         }
@@ -295,6 +295,14 @@ export const useSleeper = () => {
       projections: result?.projections ?? [],
       live: result?.live ?? []
     };
+  };
+
+  const getAllProjections = async (
+    year: string,
+    week: number,
+    matchups: Matchup[]
+  ): Promise<{ projections: PlayerStats[]; live: PlayerStats[] }> => {
+    return getPlayerStats(year, week, matchups.flatMap(matchup => matchup.starters));
   };
 
   const getAllGames = async (year: string, week: number): Promise<Game[]> => {
@@ -413,6 +421,7 @@ export const useSleeper = () => {
     getTransactions,
     getNFLPlayers,
     getNFLPlayerPositions,
+    getPlayerStats,
     getAllProjections,
     getAllGames,
     calculateMatchupProjections
