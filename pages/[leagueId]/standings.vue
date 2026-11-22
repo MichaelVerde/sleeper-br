@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { Beer, LoaderCircle } from 'lucide-vue-next';
+import { Beer, Crown, LoaderCircle } from 'lucide-vue-next';
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { getMatchupPlayerPoints, isGameFinal, useSleeper } from '~/composables/useSleeperAPI';
 import type { Game, PlayerStats } from '~/composables/useGraphQL';
+import { LEAGUE_MEMBERS, MAIN_LEAGUE_ID, PARLAYS_BY_WEEK, cuckAssetId, cuckRank, type ParlayLeg } from '~/lib/parlay';
 import type { LeagueInfo, Matchup, NFLSeasonInfo, Roster, User } from '~/types/sleeper';
 
 interface TeamStanding {
@@ -18,12 +19,19 @@ interface TeamStanding {
   pointsFor: number;
   pointsAgainst: number;
   shotguns: number;
+  parlayWins: number;
+  parlayLosses: number;
+  parlayPushes: number;
+  cuckIndexTotal: number;
+  cuckIndexLegs: number;
+  biggestCuckWeeks: number;
 }
 
 interface WeeklyLeagueData {
   week: number;
   matchups: Matchup[];
   stats: { projections: PlayerStats[]; live: PlayerStats[] };
+  parlayStats: { projections: PlayerStats[]; live: PlayerStats[] };
   games: Game[];
 }
 
@@ -34,10 +42,12 @@ const {
   getRosters,
   getNFLState,
   getAllProjections,
-  getAllGames
+  getAllGames,
+  getPlayerStats
 } = useSleeper();
 const route = useRoute();
 const leagueId = computed(() => route.params.leagueId as string);
+const hasParlayMetrics = computed(() => leagueId.value === MAIN_LEAGUE_ID);
 
 const leagueInfo = ref<LeagueInfo>();
 const nflState = ref<NFLSeasonInfo>();
@@ -75,7 +85,13 @@ const calculateStandings = (weeklyMatchups: WeeklyLeagueData[]) => {
       medianTies: 0,
       pointsFor: 0,
       pointsAgainst: 0,
-      shotguns: 0
+      shotguns: 0,
+      parlayWins: 0,
+      parlayLosses: 0,
+      parlayPushes: 0,
+      cuckIndexTotal: 0,
+      cuckIndexLegs: 0,
+      biggestCuckWeeks: 0
     });
   }
 
@@ -155,6 +171,141 @@ const calculateStandings = (weeklyMatchups: WeeklyLeagueData[]) => {
   standings.value = [...byRoster.values()];
 };
 
+type ParlayResult = 'hit' | 'miss' | 'push' | 'unsettled';
+
+const evaluateParlayResult = (leg: ParlayLeg, data: WeeklyLeagueData): ParlayResult => {
+  const live = leg.playerId
+    ? data.parlayStats.live.find(stat => String(stat.player_id) === leg.playerId)
+    : undefined;
+  const projection = leg.playerId
+    ? data.parlayStats.projections.find(stat => String(stat.player_id) === leg.playerId)
+    : undefined;
+  const game = data.games.find(candidate => {
+    if (String(candidate.game_id) === String(live?.game_id || projection?.game_id || '')) return true;
+    const teams = [candidate.metadata?.home_team, candidate.metadata?.away_team];
+    return teams.includes(leg.team) && (!leg.opponent || teams.includes(leg.opponent));
+  });
+  if (!game) return 'unsettled';
+
+  const final = isGameFinal(game);
+  const isHome = game.metadata.home_team === leg.team;
+  const teamScore = Number(isHome ? game.metadata.home_score : game.metadata.away_score);
+  const opponentScore = Number(isHome ? game.metadata.away_score : game.metadata.home_score);
+  const line = Number(leg.line ?? 0);
+
+  if (leg.kind === 'spread') {
+    if (!final) return 'unsettled';
+    const margin = teamScore - opponentScore + line;
+    return margin > 0 ? 'hit' : margin < 0 ? 'miss' : 'push';
+  }
+
+  if (leg.kind === 'moneyline') {
+    if (!final) return 'unsettled';
+    return teamScore > opponentScore ? 'hit' : teamScore < opponentScore ? 'miss' : 'push';
+  }
+
+  if (leg.kind === 'team_total_over') {
+    if (teamScore > line) return 'hit';
+    return final ? 'miss' : 'unsettled';
+  }
+
+  if (leg.kind === 'game_total_over' || leg.kind === 'game_total_under') {
+    const total = Number(game.metadata.home_score) + Number(game.metadata.away_score);
+    if (leg.kind === 'game_total_over') {
+      if (total > line) return 'hit';
+      return final ? 'miss' : 'unsettled';
+    }
+    if (!final) return 'unsettled';
+    return total < line ? 'hit' : total > line ? 'miss' : 'push';
+  }
+
+  const stats = live?.stats ?? {};
+  const settleOver = (value: number) => value > line ? 'hit' : final ? 'miss' : 'unsettled';
+  const settleAtLeast = (value: number) => value >= line ? 'hit' : final ? 'miss' : 'unsettled';
+
+  if (leg.kind === 'receiving_yards_over') return settleOver(Number(stats.rec_yd ?? 0));
+  if (leg.kind === 'receiving_yards_at_least') return settleAtLeast(Number(stats.rec_yd ?? 0));
+  if (leg.kind === 'rushing_yards_at_least') return settleAtLeast(Number(stats.rush_yd ?? 0));
+  if (leg.kind === 'passing_yards_over') return settleOver(Number(stats.pass_yd ?? 0));
+  if (leg.kind === 'passing_touchdowns_at_least') return settleAtLeast(Number(stats.pass_td ?? 0));
+  if (leg.kind === 'receptions_at_least') return settleAtLeast(Number(stats.rec ?? 0));
+
+  if (leg.kind === 'receiving_yards_under') {
+    if (!final) return 'unsettled';
+    const yards = Number(stats.rec_yd ?? 0);
+    return yards < line ? 'hit' : yards > line ? 'miss' : 'push';
+  }
+
+  const touchdowns = ['rush_td', 'rec_td', 'kr_td', 'pr_td', 'fum_rec_td']
+    .reduce((total, field) => total + Number(stats[field] ?? 0), 0);
+  if (touchdowns > 0) return 'hit';
+  return final ? 'miss' : 'unsettled';
+};
+
+const calculateParlayMetrics = (weeklyData: WeeklyLeagueData[]) => {
+  if (!hasParlayMetrics.value) return;
+
+  const standingByUser = new Map(
+    standings.value.flatMap(standing => standing.user ? [[standing.user.user_id, standing] as const] : [])
+  );
+  const rosterIdByOwner = new Map(rosters.value.map(roster => [roster.owner_id, roster.roster_id]));
+
+  for (const data of weeklyData) {
+    const parlay = PARLAYS_BY_WEEK[data.week] ?? [];
+    const matchupByRoster = new Map(data.matchups.map(matchup => [matchup.roster_id, matchup]));
+    const priorWeeks = weeklyData.filter(candidate => candidate.week < data.week);
+    const weeklyCuckIndexes: { standing: TeamStanding; index: number }[] = [];
+
+    for (const leg of parlay) {
+      const member = LEAGUE_MEMBERS[leg.submittedName];
+      const ownedAssetId = cuckAssetId(leg);
+      const standing = member ? standingByUser.get(member.userId) : undefined;
+      if (!standing) continue;
+
+      const result = evaluateParlayResult(leg, data);
+      if (result === 'unsettled') continue;
+
+      if (result === 'hit') standing.parlayWins++;
+      else if (result === 'miss') standing.parlayLosses++;
+      else standing.parlayPushes++;
+
+      let index = 0;
+      if (ownedAssetId) {
+        const bettorRosterId = rosterIdByOwner.get(member.userId);
+        const bettorMatchup = bettorRosterId ? matchupByRoster.get(bettorRosterId) : undefined;
+        const playerMatchup = data.matchups.find(matchup => matchup.players?.includes(ownedAssetId));
+
+        if (bettorRosterId && playerMatchup && playerMatchup.roster_id !== bettorRosterId) {
+          index += 1;
+          if (bettorMatchup && bettorMatchup.matchup_id === playerMatchup.matchup_id) index += 2;
+        }
+
+        const previouslyOwned = Boolean(bettorRosterId) && priorWeeks.some(candidate => (
+          candidate.matchups.some(matchup => (
+            matchup.roster_id === bettorRosterId && matchup.players?.includes(ownedAssetId)
+          ))
+        ));
+        const currentlyOwned = Boolean(bettorMatchup?.players?.includes(ownedAssetId));
+        if (previouslyOwned && !currentlyOwned) index += 2;
+
+        if (result === 'hit') index = Math.max(0, index - 1);
+        else if (result === 'miss') index += 2;
+      }
+
+      standing.cuckIndexTotal += index;
+      standing.cuckIndexLegs++;
+      if (ownedAssetId) weeklyCuckIndexes.push({ standing, index });
+    }
+
+    if (weeklyCuckIndexes.length) {
+      const highestIndex = Math.max(...weeklyCuckIndexes.map(entry => entry.index));
+      for (const entry of weeklyCuckIndexes) {
+        if (entry.index === highestIndex) entry.standing.biggestCuckWeeks++;
+      }
+    }
+  }
+};
+
 onMounted(async () => {
   try {
     [leagueInfo.value, nflState.value, users.value, rosters.value] = await Promise.all([
@@ -172,14 +323,19 @@ onMounted(async () => {
     const weeklyData = await Promise.all(
       weeks.map(async week => {
         const matchups = await getMatchups(leagueId.value, week);
-        const [stats, games] = await Promise.all([
+        const parlayPlayerIds = (PARLAYS_BY_WEEK[week] ?? []).flatMap(leg => leg.playerId ? [leg.playerId] : []);
+        const [stats, games, parlayStats] = await Promise.all([
           getAllProjections(leagueInfo.value!.season, week, matchups),
-          getAllGames(leagueInfo.value!.season, week)
+          getAllGames(leagueInfo.value!.season, week),
+          hasParlayMetrics.value && parlayPlayerIds.length
+            ? getPlayerStats(leagueInfo.value!.season, week, parlayPlayerIds)
+            : Promise.resolve({ projections: [], live: [] })
         ]);
-        return { week, matchups, stats, games };
+        return { week, matchups, stats, parlayStats, games };
       })
     );
     calculateStandings(weeklyData);
+    calculateParlayMetrics(weeklyData);
   } catch (error) {
     console.error('Error loading custom standings:', error);
   } finally {
@@ -207,6 +363,12 @@ const getAvatarUrl = (standing: TeamStanding) => {
 const totalWins = (standing: TeamStanding) => standing.matchupWins + standing.medianWins;
 const totalLosses = (standing: TeamStanding) => standing.matchupLosses + standing.medianLosses;
 const totalTies = (standing: TeamStanding) => standing.matchupTies + standing.medianTies;
+const parlayRecord = (standing: TeamStanding) => `${standing.parlayWins}-${standing.parlayLosses}${
+  standing.parlayPushes ? `-${standing.parlayPushes}` : ''
+}`;
+const averageCuckRank = (standing: TeamStanding) => cuckRank(
+  standing.cuckIndexLegs ? standing.cuckIndexTotal / standing.cuckIndexLegs : 0
+);
 </script>
 
 <template>
@@ -216,11 +378,16 @@ const totalTies = (standing: TeamStanding) => standing.matchupTies + standing.me
 
   <main v-else class="min-h-screen bg-slate-50">
     <div class="container mx-auto max-w-5xl px-3 py-4 sm:px-4 sm:py-8">
-      <LeagueHeader :league-id="leagueId" :league-name="leagueInfo?.name" active="standings" />
+      <LeagueHeader
+        :league-id="leagueId"
+        :league-name="leagueInfo?.name"
+        active="standings"
+        :current-week="nflState?.week"
+      />
 
       <div class="hidden overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200 md:block">
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[920px] text-left">
+          <table class="w-full min-w-[1240px] text-left">
             <thead class="bg-slate-100 text-sm uppercase tracking-wide text-slate-500">
               <tr>
                 <th class="px-4 py-3">Rank</th>
@@ -229,6 +396,9 @@ const totalTies = (standing: TeamStanding) => standing.matchupTies + standing.me
                 <th class="px-4 py-3 text-center">Matchup</th>
                 <th class="px-4 py-3 text-center">BR</th>
                 <th class="px-4 py-3 text-center">Shotguns</th>
+                <th v-if="hasParlayMetrics" class="px-4 py-3 text-center">Parlay</th>
+                <th v-if="hasParlayMetrics" class="px-4 py-3 text-center">Avg Cuck</th>
+                <th v-if="hasParlayMetrics" class="px-4 py-3 text-center">Biggest Cuck</th>
                 <th class="px-4 py-3 text-right">PF</th>
                 <th class="px-4 py-3 text-right">PA</th>
               </tr>
@@ -264,6 +434,17 @@ const totalTies = (standing: TeamStanding) => standing.matchupTies + standing.me
                     <Beer class="h-4 w-4" /> {{ standing.shotguns }}
                   </span>
                 </td>
+                <td v-if="hasParlayMetrics" class="px-4 py-4 text-center font-semibold tabular-nums text-fuchsia-800">
+                  {{ parlayRecord(standing) }}
+                </td>
+                <td v-if="hasParlayMetrics" class="max-w-48 px-4 py-4 text-center text-sm font-semibold text-fuchsia-800">
+                  {{ averageCuckRank(standing) }}
+                </td>
+                <td v-if="hasParlayMetrics" class="px-4 py-4 text-center">
+                  <span class="inline-flex items-center gap-1.5 font-semibold tabular-nums text-fuchsia-800">
+                    <Crown class="h-4 w-4" /> {{ standing.biggestCuckWeeks }}
+                  </span>
+                </td>
                 <td class="px-4 py-4 text-right font-medium tabular-nums">{{ standing.pointsFor.toFixed(2) }}</td>
                 <td class="px-4 py-4 text-right font-medium tabular-nums">{{ standing.pointsAgainst.toFixed(2) }}</td>
               </tr>
@@ -296,7 +477,7 @@ const totalTies = (standing: TeamStanding) => standing.matchupTies + standing.me
               {{ totalWins(standing) }}-{{ totalLosses(standing) }}<span v-if="totalTies(standing)">-{{ totalTies(standing) }}</span>
             </p>
           </div>
-          <div class="mt-3 grid grid-cols-5 gap-1 text-center">
+          <div class="mt-3 grid grid-cols-4 gap-1 text-center">
             <div class="rounded-md bg-slate-50 p-1.5">
               <p class="text-xs text-slate-500">H2H</p>
               <p class="mt-0.5 text-sm font-semibold tabular-nums text-slate-800">
@@ -317,10 +498,26 @@ const totalTies = (standing: TeamStanding) => standing.matchupTies + standing.me
               <p class="text-xs text-slate-500">PA</p>
               <p class="mt-0.5 text-sm font-semibold tabular-nums text-slate-800">{{ standing.pointsAgainst.toFixed(0) }}</p>
             </div>
-            <div class="rounded-md bg-slate-50 p-1.5">
-              <p class="text-xs text-slate-500">SG</p>
+          </div>
+          <div class="mt-2 grid gap-1 text-center" :class="hasParlayMetrics ? 'grid-cols-4' : 'grid-cols-1'">
+            <div class="rounded-md bg-emerald-50 p-1.5 ring-1 ring-inset ring-emerald-100">
+              <p class="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">Shotguns</p>
               <p class="mt-0.5 inline-flex items-center gap-0.5 text-sm font-semibold tabular-nums text-emerald-700">
                 <Beer class="h-3.5 w-3.5" /> {{ standing.shotguns }}
+              </p>
+            </div>
+            <div v-if="hasParlayMetrics" class="rounded-md bg-fuchsia-50 p-2 ring-1 ring-inset ring-fuchsia-100">
+              <p class="text-[10px] font-semibold uppercase tracking-wide text-fuchsia-600">Parlay</p>
+              <p class="mt-0.5 font-bold tabular-nums text-fuchsia-900">{{ parlayRecord(standing) }}</p>
+            </div>
+            <div v-if="hasParlayMetrics" class="rounded-md bg-fuchsia-50 p-2 ring-1 ring-inset ring-fuchsia-100">
+              <p class="text-[10px] font-semibold uppercase tracking-wide text-fuchsia-600">Avg Cuck</p>
+              <p class="mt-0.5 break-words text-xs font-bold leading-tight text-fuchsia-900">{{ averageCuckRank(standing) }}</p>
+            </div>
+            <div v-if="hasParlayMetrics" class="rounded-md bg-fuchsia-50 p-2 ring-1 ring-inset ring-fuchsia-100">
+              <p class="text-[10px] font-semibold uppercase tracking-wide text-fuchsia-600">Biggest</p>
+              <p class="mt-0.5 inline-flex items-center gap-1 font-bold tabular-nums text-fuchsia-900">
+                <Crown class="h-3.5 w-3.5" /> {{ standing.biggestCuckWeeks }}
               </p>
             </div>
           </div>

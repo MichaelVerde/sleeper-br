@@ -246,6 +246,7 @@ const decreaseWeek = () => {
         :league-name="leagueInfo?.name"
         active="shotguns"
         :week="week"
+        :current-week="nflState?.week"
         @previous-week="decreaseWeek"
         @next-week="increaseWeek"
       />

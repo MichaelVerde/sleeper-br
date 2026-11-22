@@ -169,6 +169,7 @@ onUnmounted(() => {
         :league-name="leagueInfo?.name"
         active="battle-royale"
         :week="week"
+        :current-week="nflState?.week"
         @previous-week="decreaseWeek"
         @next-week="increaseWeek"
       />

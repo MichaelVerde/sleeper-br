@@ -173,15 +173,12 @@ onMounted(async () => {
 <template>
   <main class="min-h-screen bg-slate-50">
     <div class="container mx-auto max-w-4xl px-3 py-4 sm:px-4 sm:py-8">
-      <header class="mb-6 flex items-center justify-between gap-4 rounded-2xl bg-slate-900 p-4 text-white shadow-lg shadow-slate-200">
-        <div class="min-w-0">
-          <h1 class="truncate text-lg font-bold">{{ leagueInfo?.name ?? 'Sleeper League' }}</h1>
-          <p class="text-sm text-slate-300">Keeper Eligibility</p>
-        </div>
-        <NuxtLink :to="`/${leagueId}`" class="flex-none rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold hover:bg-white/20">
-          Back to BR
-        </NuxtLink>
-      </header>
+      <LeagueHeader
+        :league-id="leagueId"
+        :league-name="leagueInfo?.name"
+        active="keepers"
+        :current-week="nflState?.week"
+      />
 
       <div v-if="loading" class="flex min-h-[40vh] items-center justify-center text-slate-500">
         <LoaderCircle class="mr-2 animate-spin" /> Checking keeper eligibility…
