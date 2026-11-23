@@ -3,7 +3,7 @@ import { LoaderCircle } from 'lucide-vue-next';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useSleeper } from '~/composables/useSleeperAPI';
-import type { LeagueInfo, Matchup, MatchupResult, NFLSeasonInfo, Roster, User } from '~/types/sleeper';
+import type { LeagueInfo, Matchup, MatchupResult, NFLPlayer, NFLSeasonInfo, Roster, User } from '~/types/sleeper';
 
 const {
   getLeagueInfo,
@@ -11,7 +11,7 @@ const {
   getUsers,
   getRosters,
   getNFLState,
-  getNFLPlayerPositions,
+  getNFLPlayers,
   calculateMatchupProjections
 } = useSleeper();
 
@@ -26,7 +26,7 @@ const matchups = ref<Matchup[]>([]);
 const rosters = ref<Roster[]>([]);
 const users = ref<User[]>([]);
 const matchupProjections = ref<MatchupResult[]>([]);
-const playerPositions = ref<Record<string, string>>({});
+const playersById = ref<Record<string, NFLPlayer>>({});
 const loading = ref(true);
 let timerId: ReturnType<typeof setInterval> | undefined;
 
@@ -34,12 +34,12 @@ const reloadMatchups = async () => {
   if (!week.value) return;
 
   try {
-    matchups.value = await getMatchups(leagueId.value, week.value);
+    matchups.value = await getMatchups(leagueId.value, week.value, true);
     matchupProjections.value = await calculateMatchupProjections(
       leagueInfo.value?.season ?? nflState.value?.season ?? String(new Date().getFullYear()),
       week.value,
       matchups.value,
-      playerPositions.value,
+      playersById.value,
       Number(leagueInfo.value?.season) < Number(nflState.value?.season)
         || (leagueInfo.value?.season === nflState.value?.season && week.value < nflState.value.week)
     );
@@ -59,10 +59,10 @@ onMounted(async () => {
       getLeagueInfo(leagueId.value),
       getNFLState()
     ]);
-    [users.value, rosters.value, playerPositions.value] = await Promise.all([
+    [users.value, rosters.value, playersById.value] = await Promise.all([
       getUsers(leagueId.value),
       getRosters(leagueId.value),
-      getNFLPlayerPositions()
+      getNFLPlayers()
     ]);
     week.value = nflState.value.week;
     timerId = setInterval(reloadMatchups, 60000);
@@ -213,16 +213,16 @@ onUnmounted(() => {
                 <span class="text-slate-500">
                   Actual
                   <strong class="ml-1 font-semibold tabular-nums text-slate-900">
-                    {{ getPoints(user.user_id)?.points?.toFixed(1) ?? '0.0' }}
+                    {{ getPoints(user.user_id)?.points?.toFixed(2) ?? '0.00' }}
                   </strong>
                 </span>
                 <span class="text-slate-500">
                   Projected
                   <strong class="ml-1 font-semibold tabular-nums text-blue-700">
-                    {{ getPoints(user.user_id)?.starters_projected_total.toFixed(1) ?? '0.0' }}
+                    {{ getPoints(user.user_id)?.starters_projected_total.toFixed(2) ?? '0.00' }}
                   </strong>
                   <span class="ml-1 tabular-nums text-slate-400">
-                    ± {{ getPoints(user.user_id)?.starters_standard_deviation.toFixed(1) ?? '0.0' }}
+                    ± {{ getPoints(user.user_id)?.starters_standard_deviation.toFixed(2) ?? '0.00' }}
                   </span>
                 </span>
               </div>
@@ -260,7 +260,7 @@ onUnmounted(() => {
             class="flex items-center gap-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-amber-600"
           >
             <span class="h-px flex-1 bg-amber-500"></span>
-            Projected BR Win Score {{ projectedMedian.toFixed(1) }}
+            Projected BR Win Score {{ projectedMedian.toFixed(2) }}
             <span class="h-px flex-1 bg-amber-500"></span>
           </div>
         </template>

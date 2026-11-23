@@ -14,6 +14,9 @@ export interface NFLPlayer {
   first_name?: string;
   last_name?: string;
   team?: string;
+  status?: string;
+  injury_status?: string | null;
+  active?: boolean;
 }
   
 
@@ -26,6 +29,7 @@ export interface NFLPlayer {
     players: string[]; // Array of all player IDs in the roster
     players_points?: Record<string, number>; // Week-specific score keyed by player ID
     custom_points?: number; // Custom points if any (optional)
+    subs?: Record<string, string>; // AutoSub mapping: starter player ID -> substitute player ID
   }
   
 

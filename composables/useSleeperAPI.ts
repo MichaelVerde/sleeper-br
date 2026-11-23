@@ -45,7 +45,10 @@ export const getMatchupPlayerPoints = (
   playerId: string,
   starterIndex: number
 ): number | undefined => {
-  const points = matchup.players_points?.[playerId] ?? matchup.starters_points?.[starterIndex];
+  const starterPoints = matchup.starters[starterIndex] === playerId
+    ? matchup.starters_points?.[starterIndex]
+    : undefined;
+  const points = matchup.players_points?.[playerId] ?? starterPoints;
   return points === undefined || points === null || !Number.isFinite(Number(points))
     ? undefined
     : Number(points);
@@ -201,15 +204,38 @@ const addAboveMedianProbabilities = (
 };
 
 export const useSleeper = () => {
+  const { callGraphQL } = useGraphQL<any>();
+
   const getLeagueInfo = async (leagueId: string): Promise<LeagueInfo> => {
     return fetchJson<LeagueInfo>(`${BASE_URL}/league/${leagueId}`, 'No league data returned');
   };
 
-  const getMatchups = async (leagueId: string, week: number): Promise<Matchup[]> => {
-    return fetchJson<Matchup[]>(
+  const getMatchups = async (leagueId: string, week: number, includeSubs = false): Promise<Matchup[]> => {
+    const matchups = await fetchJson<Matchup[]>(
       `${BASE_URL}/league/${leagueId}/matchups/${week}`,
       'No matchup data returned'
     );
+    if (!includeSubs) return matchups;
+
+    const rawMatchups = await callGraphQL(`
+        query get_matchup_autosubs {
+          matchup_legs_raw(league_id: "${leagueId}", round: ${week}) {
+            roster_id
+            subs
+          }
+        }
+      `).catch(() => null);
+    const subsByRoster = new Map<number, Record<string, string>>();
+    for (const matchup of rawMatchups?.matchup_legs_raw ?? []) {
+      if (matchup.roster_id !== undefined && matchup.subs) {
+        subsByRoster.set(Number(matchup.roster_id), matchup.subs);
+      }
+    }
+
+    return matchups.map(matchup => ({
+      ...matchup,
+      subs: subsByRoster.get(matchup.roster_id)
+    }));
   };
 
   const getRosters = async (leagueId: string): Promise<Roster[]> => {
@@ -256,8 +282,6 @@ export const useSleeper = () => {
     );
   };
 
-  const { callGraphQL } = useGraphQL<any>();
-
   const getPlayerStats = async (
     year: string,
     week: number,
@@ -302,7 +326,10 @@ export const useSleeper = () => {
     week: number,
     matchups: Matchup[]
   ): Promise<{ projections: PlayerStats[]; live: PlayerStats[] }> => {
-    return getPlayerStats(year, week, matchups.flatMap(matchup => matchup.starters));
+    return getPlayerStats(year, week, matchups.flatMap(matchup => [
+      ...matchup.starters,
+      ...Object.values(matchup.subs ?? {})
+    ]));
   };
 
   const getAllGames = async (year: string, week: number): Promise<Game[]> => {
@@ -324,7 +351,7 @@ export const useSleeper = () => {
     season: string,
     week: number,
     matchups: Matchup[],
-    playerPositions: Record<string, string>,
+    playersById: Record<string, NFLPlayer>,
     isHistoricalWeek = false
   ): Promise<MatchupResult[]> => {
     const [games, stats] = await Promise.all([
@@ -351,7 +378,20 @@ export const useSleeper = () => {
     const scoresAreFinal = isHistoricalWeek || allGamesFinal;
 
     const results = matchups.map(matchup => {
-      const starters: StarterBreakdown[] = matchup.starters.map(playerId => {
+      const effectiveStarterIds = matchup.starters.map(playerId => {
+        const substituteId = matchup.subs?.[playerId];
+        const player = playersById[playerId];
+        const status = player?.status?.toLowerCase();
+        const injuryStatus = player?.injury_status?.toLowerCase();
+        const confirmedInactive = status === 'inactive'
+          || ['out', 'ir', 'pup', 'sus', 'suspended', 'na'].includes(injuryStatus ?? '');
+
+        return !isHistoricalWeek && substituteId && confirmedInactive
+          ? substituteId
+          : playerId;
+      });
+
+      const starters: StarterBreakdown[] = effectiveStarterIds.map(playerId => {
         const live = liveByPlayer.get(playerId);
         const projection = projectionsByPlayer.get(playerId);
         const livePoints = Number(live?.stats?.pts_half_ppr ?? 0);
@@ -360,7 +400,9 @@ export const useSleeper = () => {
         const playerGameIsFinal = isGameFinal(game);
         const secondsRemaining = getSecondsRemaining(game);
         const isDefense = /^[a-zA-Z]+$/.test(String(playerId));
-        const position = isDefense ? 'DEF' : (playerPositions[playerId] || '');
+        const position = isDefense
+          ? 'DEF'
+          : (playersById[playerId]?.position || playersById[playerId]?.fantasy_positions?.[0] || '');
         const dynamicProjection = playerGameIsFinal
           ? livePoints
           : calculateLiveProjection(livePoints, projectedPoints, secondsRemaining, isDefense);
@@ -382,8 +424,14 @@ export const useSleeper = () => {
       });
 
       const calculatedLiveTotal = starters.reduce((sum, starter) => sum + starter.live_points, 0);
-      const finalScore = Number(matchup.points ?? calculatedLiveTotal);
-      const startersLiveTotal = scoresAreFinal ? finalScore : calculatedLiveTotal;
+      const effectiveActualTotal = effectiveStarterIds.reduce((sum, playerId, starterIndex) => {
+        const points = getMatchupPlayerPoints(matchup, playerId, starterIndex);
+        return sum + (points ?? starters[starterIndex]?.live_points ?? 0);
+      }, 0);
+      const officialScore = Number(matchup.points ?? calculatedLiveTotal);
+      const liveScore = matchup.custom_points != null ? officialScore : effectiveActualTotal;
+      const finalScore = scoresAreFinal ? officialScore : liveScore;
+      const startersLiveTotal = finalScore;
       const startersProjectedTotal = scoresAreFinal
         ? finalScore
         : starters.reduce((sum, starter) => sum + starter.projected_points, 0);
@@ -400,7 +448,7 @@ export const useSleeper = () => {
         starters_variance: startersVariance,
         starters_standard_deviation: Math.sqrt(startersVariance),
         above_median_probability: 0,
-        points: matchup.points
+        points: finalScore
       } as MatchupResult;
     });
 

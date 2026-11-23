@@ -11,7 +11,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { isGameFinal, useSleeper } from '~/composables/useSleeperAPI';
 import type { Game, PlayerStats } from '~/composables/useGraphQL';
-import { LEAGUE_MEMBERS, MAIN_LEAGUE_ID, PARLAYS_BY_WEEK, cuckAssetId, type ParlayLeg } from '~/lib/parlay';
+import { CUCK_RANKS, LEAGUE_MEMBERS, MAIN_LEAGUE_ID, PARLAYS_BY_WEEK, cuckAssetId, cuckRank, type ParlayLeg } from '~/lib/parlay';
 import type { LeagueInfo, Matchup, Roster, User } from '~/types/sleeper';
 
 type LegStatus = 'hit' | 'miss' | 'push' | 'live' | 'pending';
@@ -418,17 +418,6 @@ const statusTextClasses = (status: LegStatus) => ({
   pending: 'text-sky-700'
 }[status]);
 
-const CUCK_RANKS = [
-  'No Cuckery Detected',
-  'Cuck Curious',
-  'Peeking Through the Keyhole',
-  'Holding the Bull’s Pants',
-  'Certified Bedroom Cuck',
-  'Hotel-Chair Masturbator',
-  'The Bull’s Cleanup Crew',
-  'Intergalactic Mega-Cuck'
-];
-const cuckRank = (index: number) => CUCK_RANKS[Math.min(index, CUCK_RANKS.length - 1)];
 const openCuckLegend = (leg?: EvaluatedLeg) => {
   selectedCuckIndex.value = leg?.cuckIndex;
   selectedCuckName.value = leg?.submittedName ?? '';
