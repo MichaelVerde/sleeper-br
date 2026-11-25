@@ -215,5 +215,19 @@ export const PARLAYS_BY_WEEK: Record<number, ParlayLeg[]> = {
     { submittedName: 'Roop', kind: 'receiving_yards_over', playerId: '11632', playerName: 'Malik Nabers', team: 'NYG', line: 66.5 },
     { submittedName: 'Griff', kind: 'anytime_td', playerId: '12490', playerName: 'Bhayshul Tuten', team: 'JAX' },
     { submittedName: 'Gav', kind: 'anytime_td', playerId: '13337', playerName: 'Emmett Johnson', team: 'KC' }
+  ],
+  12: [
+    { submittedName: 'Mark', kind: 'anytime_td', playerId: '9221', playerName: 'Jahmyr Gibbs', team: 'DET' },
+    { submittedName: 'Jaynaan', kind: 'anytime_td', playerId: '4984', playerName: 'Josh Allen', team: 'BUF' },
+    { submittedName: 'Jimmer', kind: 'anytime_td', playerId: '7564', playerName: 'Ja\u2019Marr Chase', team: 'CIN' },
+    { submittedName: 'Rob', kind: 'anytime_td', playerId: '8150', playerName: 'Kyren Williams', team: 'LAR' },
+    { submittedName: 'Alastair', kind: 'anytime_td', playerId: '6786', playerName: 'CeeDee Lamb', team: 'DAL' },
+    { submittedName: 'Griff', kind: 'anytime_td', playerId: '12501', playerName: 'Matthew Golden', team: 'GB' },
+    { submittedName: 'Verde', kind: 'anytime_td', playerId: '11632', playerName: 'Malik Nabers', team: 'NYG' },
+    { submittedName: 'Roop', kind: 'anytime_td', playerId: '6790', playerName: 'D\u2019Andre Swift', team: 'CHI' },
+    { submittedName: 'Gav', kind: 'anytime_td', playerId: '13345', playerName: 'Jonah Coleman', team: 'DEN' },
+    { submittedName: 'Tom', kind: 'moneyline', team: 'CHI' },
+    { submittedName: 'Holden', kind: 'receiving_yards_over', playerId: '12501', playerName: 'Matthew Golden', team: 'GB', line: 80 },
+    { submittedName: 'Aron', kind: 'anytime_td', playerId: '9997', playerName: 'Zay Flowers', team: 'BAL' }
   ]
 };
