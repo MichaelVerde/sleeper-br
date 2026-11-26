@@ -23,7 +23,7 @@ interface TeamStanding {
   parlayLosses: number;
   parlayPushes: number;
   cuckIndexTotal: number;
-  cuckIndexLegs: number;
+  cuckIndexWeeks: number;
   biggestCuckWeeks: number;
 }
 
@@ -90,7 +90,7 @@ const calculateStandings = (weeklyMatchups: WeeklyLeagueData[]) => {
       parlayLosses: 0,
       parlayPushes: 0,
       cuckIndexTotal: 0,
-      cuckIndexLegs: 0,
+      cuckIndexWeeks: 0,
       biggestCuckWeeks: 0
     });
   }
@@ -254,7 +254,11 @@ const calculateParlayMetrics = (weeklyData: WeeklyLeagueData[]) => {
     const parlay = PARLAYS_BY_WEEK[data.week] ?? [];
     const matchupByRoster = new Map(data.matchups.map(matchup => [matchup.roster_id, matchup]));
     const priorWeeks = weeklyData.filter(candidate => candidate.week < data.week);
-    const weeklyCuckIndexes: { standing: TeamStanding; index: number }[] = [];
+    const weeklyCuckIndexes = new Map<string, {
+      standing: TeamStanding;
+      index: number;
+      hasPlayerAsset: boolean;
+    }>();
 
     for (const leg of parlay) {
       const member = LEAGUE_MEMBERS[leg.submittedName];
@@ -293,13 +297,24 @@ const calculateParlayMetrics = (weeklyData: WeeklyLeagueData[]) => {
       }
 
       standing.cuckIndexTotal += index;
-      standing.cuckIndexLegs++;
-      if (ownedAssetId) weeklyCuckIndexes.push({ standing, index });
+      const weeklyCuckIndex = weeklyCuckIndexes.get(member.userId);
+      if (weeklyCuckIndex) {
+        weeklyCuckIndex.index += index;
+        weeklyCuckIndex.hasPlayerAsset ||= Boolean(ownedAssetId);
+      } else {
+        standing.cuckIndexWeeks++;
+        weeklyCuckIndexes.set(member.userId, {
+          standing,
+          index,
+          hasPlayerAsset: Boolean(ownedAssetId)
+        });
+      }
     }
 
-    if (weeklyCuckIndexes.length) {
-      const highestIndex = Math.max(...weeklyCuckIndexes.map(entry => entry.index));
-      for (const entry of weeklyCuckIndexes) {
+    const weeklyPlayerCuckIndexes = [...weeklyCuckIndexes.values()].filter(entry => entry.hasPlayerAsset);
+    if (weeklyPlayerCuckIndexes.length) {
+      const highestIndex = Math.max(...weeklyPlayerCuckIndexes.map(entry => entry.index));
+      for (const entry of weeklyPlayerCuckIndexes) {
         if (entry.index === highestIndex) entry.standing.biggestCuckWeeks++;
       }
     }
@@ -367,7 +382,7 @@ const parlayRecord = (standing: TeamStanding) => `${standing.parlayWins}-${stand
   standing.parlayPushes ? `-${standing.parlayPushes}` : ''
 }`;
 const averageCuckRank = (standing: TeamStanding) => cuckRank(
-  standing.cuckIndexLegs ? standing.cuckIndexTotal / standing.cuckIndexLegs : 0
+  standing.cuckIndexWeeks ? standing.cuckIndexTotal / standing.cuckIndexWeeks : 0
 );
 </script>
 
