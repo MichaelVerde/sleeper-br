@@ -187,7 +187,7 @@ const evaluatedLegs = computed<EvaluatedLeg[]>(() => {
   const rosterByOwner = new Map(rosters.value.map(roster => [roster.owner_id, roster]));
   const matchupByRoster = new Map(weekMatchups.value.map(matchup => [matchup.roster_id, matchup]));
 
-  return parlay.value.map(leg => {
+  const legs = parlay.value.map(leg => {
     const member = LEAGUE_MEMBERS[leg.submittedName];
     const ownedAssetId = cuckAssetId(leg);
     const live = leg.playerId ? liveByPlayer.get(leg.playerId) : undefined;
@@ -373,6 +373,17 @@ const evaluatedLegs = computed<EvaluatedLeg[]>(() => {
     const touchdownText = touchdowns === 1 ? '1 touchdown' : `${touchdowns} touchdowns`;
     return evaluate(status, `${gameStage} – ${touchdownText}`);
   });
+  const cuckIndexByMember = new Map<string, number>();
+  for (const leg of legs) {
+    cuckIndexByMember.set(
+      leg.member.userId,
+      (cuckIndexByMember.get(leg.member.userId) ?? 0) + leg.cuckIndex
+    );
+  }
+  return legs.map(leg => ({
+    ...leg,
+    cuckIndex: cuckIndexByMember.get(leg.member.userId) ?? leg.cuckIndex
+  }));
 });
 
 const statusCounts = computed(() => evaluatedLegs.value.reduce((counts, leg) => {
@@ -383,8 +394,10 @@ const statusCounts = computed(() => evaluatedLegs.value.reduce((counts, leg) => 
 const biggestCucks = computed(() => {
   const playerLegs = evaluatedLegs.value.filter(leg => Boolean(cuckAssetId(leg)));
   if (!playerLegs.length) return [];
-  const highestIndex = Math.max(...playerLegs.map(leg => leg.cuckIndex));
-  return playerLegs.filter(leg => leg.cuckIndex === highestIndex);
+  const playerByMember = new Map(playerLegs.map(leg => [leg.member.userId, leg]));
+  const uniquePlayerLegs = [...playerByMember.values()];
+  const highestIndex = Math.max(...uniquePlayerLegs.map(leg => leg.cuckIndex));
+  return uniquePlayerLegs.filter(leg => leg.cuckIndex === highestIndex);
 });
 
 const parlayStatus = computed(() => {
@@ -555,8 +568,8 @@ const hideBrokenImage = (event: Event) => {
 
         <section class="mt-2 grid gap-3">
           <article
-            v-for="leg in evaluatedLegs"
-            :key="leg.member.userId"
+            v-for="(leg, index) in evaluatedLegs"
+            :key="`${leg.member.userId}-${index}`"
             class="flex min-h-28 overflow-hidden rounded-xl shadow-sm ring-1"
             :class="cardClasses(leg.status)"
           >
