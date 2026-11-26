@@ -229,6 +229,7 @@ export const PARLAYS_BY_WEEK: Record<number, ParlayLeg[]> = {
     { submittedName: 'Tom', kind: 'moneyline', team: 'CHI' },
     { submittedName: 'Holden', kind: 'receiving_yards_over', playerId: '12501', playerName: 'Matthew Golden', team: 'GB', line: 80 },
     { submittedName: 'Aron', kind: 'anytime_td', playerId: '9997', playerName: 'Zay Flowers', team: 'BAL' },
+    { submittedName: 'Jimmer', kind: 'anytime_td', playerId: '4866', playerName: 'Saquon Barkley', team: 'PHI' },
     { submittedName: 'Griff', kind: 'anytime_td', playerId: '7547', playerName: 'Amon-Ra St. Brown', team: 'DET' },
     { submittedName: 'Rob', kind: 'anytime_td', playerId: '4034', playerName: 'Christian McCaffrey', team: 'SF' },
     { submittedName: 'Holden', kind: 'anytime_td', playerId: '13337', playerName: 'Emmett Johnson', team: 'KC' }
