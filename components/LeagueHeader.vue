@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Menu,
+  Newspaper,
   ShieldCheck,
   Swords,
   TicketCheck,
@@ -16,7 +17,7 @@ import { MAIN_LEAGUE_ID } from '~/lib/parlay';
 const props = defineProps<{
   leagueId: string;
   leagueName?: string;
-  active: 'battle-royale' | 'standings' | 'shotguns' | 'keepers' | 'parlay';
+  active: 'battle-royale' | 'standings' | 'shotguns' | 'keepers' | 'parlay' | 'recap';
   week?: number;
   currentWeek?: number;
 }>();
@@ -36,6 +37,7 @@ const items = computed(() => {
   if (props.leagueId !== MAIN_LEAGUE_ID) return baseItems;
 
   const mainLeagueItems = [
+    { id: 'recap', label: 'Recaps', path: '/recaps', icon: Newspaper },
     { id: 'keepers', label: 'Keepers', path: '/keepers', icon: ShieldCheck },
     { id: 'parlay', label: 'Parlay', path: '/parlay', icon: TicketCheck }
   ];
@@ -47,7 +49,7 @@ const closeMenu = () => menuRoot.value?.removeAttribute('open');
 </script>
 
 <template>
-  <header class="relative z-20 mb-6 flex items-center gap-2 rounded-2xl bg-slate-900 p-3 text-white shadow-lg shadow-slate-200 sm:gap-3">
+  <header class="relative z-50 mb-6 flex items-center gap-2 rounded-2xl bg-slate-900 p-3 text-white shadow-lg shadow-slate-200 sm:gap-3">
     <NuxtLink :to="`/${leagueId}`" class="min-w-0 flex-1 px-1">
       <h1 class="truncate text-base font-bold sm:text-lg">{{ leagueName || 'Sleeper League' }}</h1>
     </NuxtLink>
